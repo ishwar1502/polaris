@@ -793,13 +793,13 @@ class SignificanceEngine(SignificanceEngineInterface):
             return SignificanceResult(
                 experience_id=sig_score.experience_id,
                 score=sig_score.score,
-                importance=sig_score.importance,
+                importance=experience.importance,         # ← preserve caller-supplied importance
                 eligible_for_storage=eligible_storage,
                 eligible_for_long_term_memory=eligible_ltm,
                 promotion_eligible=promotion,
                 factor_breakdown=sig_score.factor_breakdown,
                 notes=sig_score.notes,
-            )
+)
 
     # ------------------------------------------------------------------
     # Threshold management
@@ -1007,7 +1007,7 @@ class SignificanceEngine(SignificanceEngineInterface):
 
     def score_batch(
         self, experiences: list[Experience]
-    ) -> dict[str, float]:
+    ) -> list[float]:
         """Score multiple experiences in a single call.
 
         Implements :meth:`SignificanceEngineInterface.score_batch`.
@@ -1019,19 +1019,16 @@ class SignificanceEngine(SignificanceEngineInterface):
 
         Returns
         -------
-        dict[str, float]
-            Mapping of ``experience_id`` → significance score.
+        list[float]
+            Significance scores in the same order as *experiences*.
         """
         with self._lock:
             self._require_initialized("score_batch")
-            return {
-                exp.experience_id: self.score_experience(exp).score
-                for exp in experiences
-            }
+            return [self.score_experience(exp).score for exp in experiences]
 
     def classify_batch(
         self, experiences: list[Experience]
-    ) -> dict[str, ExperienceImportance]:
+    ) -> list[ExperienceImportance]:
         """Classify multiple experiences in a single call.
 
         Implements :meth:`SignificanceEngineInterface.classify_batch`.
@@ -1043,15 +1040,12 @@ class SignificanceEngine(SignificanceEngineInterface):
 
         Returns
         -------
-        dict[str, ExperienceImportance]
-            Mapping of ``experience_id`` → :class:`ExperienceImportance` tier.
+        list[ExperienceImportance]
+            Importance tiers in the same order as *experiences*.
         """
         with self._lock:
             self._require_initialized("classify_batch")
-            return {
-                exp.experience_id: self.score_experience(exp).importance
-                for exp in experiences
-            }
+            return [self.score_experience(exp).importance for exp in experiences]
 
     # ------------------------------------------------------------------
     # Ranking and comparison

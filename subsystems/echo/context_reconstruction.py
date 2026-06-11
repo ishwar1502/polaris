@@ -124,6 +124,7 @@ class TimelineEntry:
     tags: list[str] = field(default_factory=list)
     session_id: str | None = None
     source_subsystem: str = "ECHO_API"
+    experience: Experience | None = None
 
 
 @dataclass
@@ -287,6 +288,7 @@ class ReconstructedSession:
     total_member_count: int = 0
     importance_breakdown: dict[str, int] = field(default_factory=dict)
     type_breakdown: dict[str, int] = field(default_factory=dict)
+    experience: TimelineEntry | None = None
     reconstructed_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -374,6 +376,7 @@ class ReconstructedExperienceChain:
     reflections: list[ExperienceChainLink] = field(default_factory=list)
     narrative: str = ""
     chain_depth: int = 0
+    origin: ExperienceChainLink | None = None
     reconstructed_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -407,6 +410,7 @@ class ReconstructedRelatedMemories:
     shared_project_refs: list[str] = field(default_factory=list)
     session_siblings: list[TimelineEntry] = field(default_factory=list)
     cross_references: dict[str, list[str]] = field(default_factory=dict)
+    anchor: TimelineEntry | None = None
     reconstructed_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -659,6 +663,7 @@ class ContextReconstructionEngine:
             tags=experience.tag_names(),
             session_id=experience.metadata.session_id,
             source_subsystem=experience.metadata.source_subsystem,
+            experience=experience,
         )
 
     def _experience_to_chain_link(
@@ -1323,6 +1328,7 @@ class ContextReconstructionEngine:
             total_member_count=len(member_entries),
             importance_breakdown=self._compute_importance_breakdown(member_experiences),
             type_breakdown=self._compute_type_breakdown(member_experiences),
+            experience=self._experience_to_timeline_entry(session_exp) if session_exp is not None else None,
         )
 
         self._publish_event(
@@ -1581,6 +1587,7 @@ class ContextReconstructionEngine:
             reflections=reflection_links,
             narrative=narrative,
             chain_depth=depth,
+            origin=origin_link,
         )
 
         self._publish_event(
@@ -1765,6 +1772,7 @@ class ContextReconstructionEngine:
                 self._experience_to_timeline_entry(e) for e in session_siblings
             ],
             cross_references=cross_refs,
+            anchor=self._experience_to_timeline_entry(anchor),
         )
 
         self._publish_event(
@@ -1962,14 +1970,16 @@ class ContextReconstructionEngine:
 
     def build_context_graph(
         self,
-        experience_id: str,
+        experience_id: str | None = None,
         *,
         depth: int = 2,
         include_session_members: bool = True,
         include_reflections: bool = True,
         max_nodes: int = _GRAPH_MAX_NODES,
+        min_importance: ExperienceImportance = ExperienceImportance.LOW,
     ) -> ContextGraph:
-        """Build an episodic context graph centred on a given experience.
+        """Build an episodic context graph centred on a given experience, or
+        a global graph across all experiences when no anchor is supplied.
 
         Assembles a graph of :class:`ContextNode` and :class:`ContextEdge`
         objects representing the episodic neighbourhood of the anchor
@@ -1980,9 +1990,12 @@ class ContextReconstructionEngine:
         ----------
         experience_id:
             UUID of the graph anchor :class:`~subsystems.echo.models.Experience`.
+            When ``None``, a global graph is built from all experiences that
+            meet *min_importance*, limited to *max_nodes*.
         depth:
             Traversal depth from the anchor.  Higher depth builds a wider
-            graph but increases reconstruction time.
+            graph but increases reconstruction time.  Only applies in anchored
+            mode.
         include_session_members:
             If ``True``, include all experiences from the same session as
             graph nodes.
@@ -1990,6 +2003,10 @@ class ContextReconstructionEngine:
             If ``True``, include REFLECTION experiences linked to the anchor.
         max_nodes:
             Hard cap on the total number of nodes in the graph.
+        min_importance:
+            In global mode, exclude experiences below this importance tier.
+            In anchored mode, this parameter is accepted but not used as a
+            filter (the anchor is always included).
 
         Returns
         -------
@@ -2001,15 +2018,99 @@ class ContextReconstructionEngine:
         EchoNotInitializedError
             If the engine has not been initialised.
         ExperienceNotFoundError
-            If no experience with ``experience_id`` exists.
+            If ``experience_id`` is supplied and no matching experience exists.
         """
         self._assert_running("build_context_graph")
 
+        # ------------------------------------------------------------------
+        # Global graph mode (no anchor)
+        # ------------------------------------------------------------------
+        if experience_id is None:
+            nodes: dict[str, ContextNode] = {}
+            edges: list[ContextEdge] = []
+            edge_set: set[tuple[str, str, str]] = set()
+
+            def _add_node(exp: Experience) -> None:
+                if exp.experience_id not in nodes and len(nodes) < max_nodes:
+                    nodes[exp.experience_id] = self._experience_to_context_node(exp)
+
+            def _add_edge(
+                source_id: str,
+                target_id: str,
+                relation: str,
+                weight: float = 1.0,
+            ) -> None:
+                key = (source_id, target_id, relation)
+                if key not in edge_set:
+                    edges.append(
+                        ContextEdge(
+                            source_id=source_id,
+                            target_id=target_id,
+                            relation=relation,
+                            weight=weight,
+                        )
+                    )
+                    edge_set.add(key)
+
+            try:
+                all_exps = self._experience_engine.query_experiences(
+                    min_importance=min_importance,
+                    limit=max_nodes,
+                )
+            except Exception:  # noqa: BLE001
+                all_exps = []
+
+            for exp in all_exps:
+                _add_node(exp)
+
+            # Build related-to edges between nodes
+            node_exps = {
+                nid: self._get_experience_safe(nid)
+                for nid in list(nodes.keys())
+            }
+            for eid, exp in node_exps.items():
+                if exp is None:
+                    continue
+                for rid in exp.metadata.related_experience_ids:
+                    if rid in nodes:
+                        if exp.occurred_at < (node_exps.get(rid) or exp).occurred_at:
+                            _add_edge(eid, rid, "precedes", 0.8)
+                        else:
+                            _add_edge(rid, eid, "precedes", 0.8)
+                        _add_edge(eid, rid, "related_to", 0.7)
+
+            graph = ContextGraph(
+                anchor_experience_id="",
+                nodes=list(nodes.values()),
+                edges=edges,
+                node_count=len(nodes),
+                edge_count=len(edges),
+            )
+
+            self._publish_event(
+                "polaris.echo.context.context_graph_built",
+                {
+                    "anchor_experience_id": None,
+                    "node_count": graph.node_count,
+                    "edge_count": graph.edge_count,
+                },
+            )
+            _logger.info(
+                "ContextReconstructionEngine: global context graph built "
+                "(%d nodes, %d edges).",
+                graph.node_count,
+                graph.edge_count,
+            )
+            return graph
+
+        # ------------------------------------------------------------------
+        # Anchored graph mode (original behaviour)
+        # ------------------------------------------------------------------
         anchor = self._experience_engine.get_experience(experience_id)
 
-        nodes: dict[str, ContextNode] = {}
-        edges: list[ContextEdge] = []
-        edge_set: set[tuple[str, str, str]] = set()
+        nodes = {}
+        edges = []
+        edge_set = set()
 
         def _add_node(exp: Experience) -> None:
             if exp.experience_id not in nodes and len(nodes) < max_nodes:

@@ -419,7 +419,7 @@ class ExperienceRetrievalEngine(ExperienceRetrievalEngineInterface):
         min_importance: ExperienceImportance = ExperienceImportance.LOW,
         session_id: str | None = None,
         limit: int = _DEFAULT_TAG_LIMIT,
-    ) -> list[Experience]:
+    ) -> list[RetrievalResult]:
         """Retrieve experiences that carry specified tags.
 
         Parameters
@@ -440,9 +440,9 @@ class ExperienceRetrievalEngine(ExperienceRetrievalEngineInterface):
 
         Returns
         -------
-        list[Experience]
-            Matching experiences ordered by descending importance then
-            recency.
+        list[RetrievalResult]
+            Matching experiences wrapped in :class:`RetrievalResult`, ordered
+            by descending importance then recency.
         """
         with self._lock:
             self._assert_running("search_by_tags")
@@ -484,16 +484,23 @@ class ExperienceRetrievalEngine(ExperienceRetrievalEngineInterface):
                 )
             )
 
-            top = [exp for exp, _ in matches[:limit]]
-            self._record_retrieval(top)
+            top_exps = [exp for exp, _ in matches[:limit]]
+            self._record_retrieval(top_exps)
 
             _logger.debug(
                 "search_by_tags(%r, match_all=%s) → %d results.",
                 tag_names,
                 match_all,
-                len(top),
+                len(top_exps),
             )
-            return top
+            return [
+                RetrievalResult(
+                    exp,
+                    float(_IMPORTANCE_ORDER[exp.importance]),
+                    f"tag match: {sorted(set(t.name.lower() for t in exp.tags) & normalised)}",
+                )
+                for exp in top_exps
+            ]
 
     # ------------------------------------------------------------------
     # Time-Range Search
@@ -501,22 +508,32 @@ class ExperienceRetrievalEngine(ExperienceRetrievalEngineInterface):
 
     def find_by_time_range(
         self,
-        start: datetime,
-        end: datetime,
+        start: datetime | None = None,
+        end: datetime | None = None,
         *,
+        occurred_after: datetime | None = None,
+        occurred_before: datetime | None = None,
         min_importance: ExperienceImportance = ExperienceImportance.LOW,
         experience_types: list[ExperienceType] | None = None,
         session_id: str | None = None,
         limit: int = _DEFAULT_TIME_RANGE_LIMIT,
-    ) -> list[Experience]:
+    ) -> list[RetrievalResult]:
         """Return experiences that occurred within a UTC time window.
 
         Parameters
         ----------
         start:
             Window start (inclusive).  Timezone-aware required.
+            Alias: ``occurred_after``.
         end:
             Window end (inclusive).  Timezone-aware required.
+            Alias: ``occurred_before``.
+        occurred_after:
+            Keyword alias for *start*.  Takes precedence over *start* when
+            both are supplied.
+        occurred_before:
+            Keyword alias for *end*.  Takes precedence over *end* when both
+            are supplied.
         min_importance:
             Exclude experiences below this tier.
         experience_types:
@@ -528,24 +545,36 @@ class ExperienceRetrievalEngine(ExperienceRetrievalEngineInterface):
 
         Returns
         -------
-        list[Experience]
-            Experiences ordered chronologically by ``occurred_at``.
+        list[RetrievalResult]
+            Experiences wrapped in :class:`RetrievalResult`, ordered
+            chronologically by ``occurred_at``.
 
         Raises
         ------
         ValueError
-            If ``start`` is after ``end`` or either is naive.
+            If the resolved start is after the resolved end, or either is naive.
         """
+        # Keyword aliases take precedence
+        resolved_start = occurred_after if occurred_after is not None else start
+        resolved_end = occurred_before if occurred_before is not None else end
+
+        if resolved_start is None or resolved_end is None:
+            raise ValueError(
+                "find_by_time_range requires both start/occurred_after and "
+                "end/occurred_before."
+            )
+
         with self._lock:
             self._assert_running("find_by_time_range")
 
-            if start.tzinfo is None or end.tzinfo is None:
+            if resolved_start.tzinfo is None or resolved_end.tzinfo is None:
                 raise ValueError(
                     "find_by_time_range requires timezone-aware datetimes."
                 )
-            if start > end:
+            if resolved_start > resolved_end:
                 raise ValueError(
-                    f"start ({start.isoformat()}) must be <= end ({end.isoformat()})."
+                    f"start ({resolved_start.isoformat()}) must be <= end "
+                    f"({resolved_end.isoformat()})."
                 )
 
             results: list[Experience] = []
@@ -562,7 +591,7 @@ class ExperienceRetrievalEngine(ExperienceRetrievalEngineInterface):
                 if oc.tzinfo is None:
                     oc = oc.replace(tzinfo=timezone.utc)
 
-                if start <= oc <= end:
+                if resolved_start <= oc <= resolved_end:
                     results.append(exp)
 
             results.sort(key=lambda e: e.occurred_at)
@@ -571,11 +600,11 @@ class ExperienceRetrievalEngine(ExperienceRetrievalEngineInterface):
 
             _logger.debug(
                 "find_by_time_range([%s, %s]) → %d results.",
-                start.isoformat(),
-                end.isoformat(),
+                resolved_start.isoformat(),
+                resolved_end.isoformat(),
                 len(top),
             )
-            return top
+            return [RetrievalResult(exp, 1.0, "time range match") for exp in top]
 
     # ------------------------------------------------------------------
     # Similarity Search  (interface contract)

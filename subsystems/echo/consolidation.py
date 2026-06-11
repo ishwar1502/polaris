@@ -188,6 +188,16 @@ class ConsolidationReport:
         self.cycle_finished_at = datetime.now(timezone.utc)
 
     @property
+    def promoted_count(self) -> int:
+        """Number of experiences promoted to long-term memory in this cycle."""
+        return len(self.promoted)
+
+    @property
+    def pruned_count(self) -> int:
+        """Number of experiences pruned in this cycle."""
+        return len(self.pruned)
+
+    @property
     def duration_seconds(self) -> float | None:
         """Return cycle duration in seconds, or ``None`` if not finished."""
         if self.cycle_finished_at is None:

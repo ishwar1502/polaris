@@ -622,6 +622,32 @@ class ExperienceEngine(ExperienceEngineInterface):
         )
         return significant[:limit]
 
+    def list_experiences(self) -> list[Experience]:
+        """Return all stored experiences in a deterministic order.
+
+        Returns experiences sorted by ``occurred_at`` ascending, then by
+        ``experience_id`` as a tiebreaker to guarantee a stable order across
+        calls.
+
+        Returns
+        -------
+        list[Experience]
+            All experiences currently held in the in-process store,
+            sorted oldest-first.
+
+        Raises
+        ------
+        EchoNotInitializedError
+            If the engine has not been initialised.
+        """
+        self._assert_running("list_experiences")
+
+        with self._lock:
+            experiences = list(self._store.values())
+
+        experiences.sort(key=lambda e: (e.occurred_at, e.experience_id))
+        return experiences
+
     # ------------------------------------------------------------------
     # Domain event publishing
     # ------------------------------------------------------------------
