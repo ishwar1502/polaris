@@ -25,7 +25,7 @@ import threading
 from datetime import datetime
 from typing import Any, Optional
 
-from ..models import (
+from .models import (
     ConfidenceProfile,
     EvidenceProfile,
     FutureModel,
@@ -36,7 +36,7 @@ from ..models import (
     ScenarioType,
     UncertaintyProfile,
 )
-from ..exceptions import (
+from .exceptions import (
     JanusAlreadyInitializedError,
     JanusApprovalBoundaryViolationError,
     JanusMissingRequiredFieldError,
@@ -49,8 +49,8 @@ from ..exceptions import (
     JanusShutdownError,
     JanusValidationError,
 )
-from ..interfaces import IScenarioEngine
-from ..schemas import (
+from .interfaces import IScenarioEngine
+from .schemas import (
     ScenarioArchiveRequest,
     ScenarioArchiveResponse,
     ScenarioGenerateRequest,
@@ -66,7 +66,7 @@ from ..schemas import (
 # ---------------------------------------------------------------------------
 
 _VALID_TRANSITIONS: dict[ScenarioStatus, frozenset[ScenarioStatus]] = {
-    ScenarioStatus.PENDING:     frozenset({ScenarioStatus.ACTIVE, ScenarioStatus.INVALIDATED}),
+    ScenarioStatus.PENDING:     frozenset({ScenarioStatus.ACTIVE, ScenarioStatus.INVALIDATED, ScenarioStatus.ARCHIVED}),
     ScenarioStatus.ACTIVE:      frozenset({ScenarioStatus.EVALUATING, ScenarioStatus.ARCHIVED, ScenarioStatus.INVALIDATED}),
     ScenarioStatus.EVALUATING:  frozenset({ScenarioStatus.EVALUATED, ScenarioStatus.ACTIVE, ScenarioStatus.INVALIDATED}),
     ScenarioStatus.EVALUATED:   frozenset({ScenarioStatus.ARCHIVED, ScenarioStatus.INVALIDATED}),
@@ -260,7 +260,7 @@ class ScenarioEngine(IScenarioEngine):
         downstream integrations populate.
         """
         import uuid
-        from ..models import (
+        from .models import (
             UncertaintyLevel,
             FutureModel,
             EvidenceProfile,
@@ -593,6 +593,12 @@ class ScenarioEngine(IScenarioEngine):
             "scenarios_by_status":  by_status,
             "engine_created_at":    self._created_at.isoformat() if self._created_at else None,
         }
+
+    def get_statistics(self) -> dict[str, Any]:
+        """Compatibility alias for statistics() with additional keys."""
+        stats = self.statistics()
+        stats["total_scenarios"] = stats.get("total_registered", 0)
+        return stats
 
     def health(self) -> dict[str, Any]:
         """Return engine health report."""

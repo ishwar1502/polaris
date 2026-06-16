@@ -24,7 +24,7 @@ import threading
 from datetime import datetime
 from typing import Any, Optional
 
-from ..models import (
+from .models import (
     ConfidenceProfile,
     EvidenceProfile,
     Forecast,
@@ -37,7 +37,7 @@ from ..models import (
     UncertaintyLevel,
     UncertaintyProfile,
 )
-from ..exceptions import (
+from .exceptions import (
     JanusAlreadyInitializedError,
     JanusForecastAssessmentError,
     JanusForecastGenerationError,
@@ -50,8 +50,8 @@ from ..exceptions import (
     JanusShutdownError,
     JanusValidationError,
 )
-from ..interfaces import IForecastingEngine
-from ..schemas import (
+from .interfaces import IForecastingEngine
+from .schemas import (
     ForecastAssessRequest,
     ForecastAssessResponse,
     ForecastGenerateRequest,

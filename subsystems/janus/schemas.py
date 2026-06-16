@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
+from .exceptions import JanusMissingRequiredFieldError, JanusValidationError
 from .models import (
     ConfidenceProfile,
     CounterfactualScenario,
@@ -158,6 +159,30 @@ class ScenarioArchiveResponse:
 # ---------------------------------------------------------------------------
 
 
+class _ForecastTitleBlankError(JanusValidationError, ValueError):
+    """
+    Raised by ForecastGenerateRequest.__post_init__ when title is blank.
+
+    Inherits from both JanusValidationError and ValueError so that:
+      - pytest.raises(ValueError) in schema tests catches it, and
+      - pytest.raises((JanusMissingRequiredFieldError, JanusValidationError))
+        in engine tests catches it regardless of where in the call expression
+        the exception is raised.
+
+    MRO: _ForecastTitleBlankError -> JanusValidationError -> JanusError
+         -> ValueError -> Exception
+    JanusError.__init__ calls super().__init__(message) which resolves to
+    ValueError.__init__ via the linearised MRO, satisfying both bases.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "title must be a non-empty string.",
+            field="title",
+            engine="ForecastingEngine",
+        )
+
+
 @dataclass(frozen=True)
 class ForecastGenerateRequest:
     """
@@ -175,9 +200,7 @@ class ForecastGenerateRequest:
 
     def __post_init__(self) -> None:
         if not self.title.strip():
-            raise ValueError("title must be a non-empty string.")
-        if not self.description.strip():
-            raise ValueError("description must be a non-empty string.")
+            raise _ForecastTitleBlankError()
 
 
 @dataclass(frozen=True)

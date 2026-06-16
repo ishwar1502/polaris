@@ -656,7 +656,16 @@ class FutureState:
 
     @property
     def probability_level(self) -> ProbabilityLevel:
-        return ProbabilityLevel.from_float(self.probability)
+        p = self.probability
+        if p > 0.80:
+            return ProbabilityLevel.HIGHLY_LIKELY
+        if p >= 0.60:
+            return ProbabilityLevel.LIKELY
+        if p > 0.40:
+            return ProbabilityLevel.POSSIBLE
+        if p > 0.20:
+            return ProbabilityLevel.UNLIKELY
+        return ProbabilityLevel.HIGHLY_UNCERTAIN
 
     @classmethod
     def create(
